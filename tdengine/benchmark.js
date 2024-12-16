@@ -3,10 +3,12 @@ import { Counter, Trend, Rate } from 'k6/metrics';
 import { sleep } from 'k6';
 
 // 配置
-const QUESTDB_URL = 'http://localhost:9000/';
-const vus = 200; // 并发用户数
+const TDENGINE_URL = 'http://localhost:6041/rest/sql/test';
+const AUTH_HEADER = `Basic cm9vdDp0YW9zZGF0YQ==`; // 使用 Base64 编码的用户名和密码
+const vus = 10; // 并发用户数
 const generateRandomString = () => Math.random().toString(36).substring(2, 8); // 生成6位随机字符串
 const USERS = Array.from({ length: vus }, (_, i) => `user${i + 1}_${generateRandomString()}`); // 动态生成 USERS
+console.log("USERS", USERS)
 const EVENTS = ['browse', 'scroll', 'purchase', 'cancel_payment'];
 
 // 自定义指标
@@ -19,42 +21,40 @@ const rowsRead = new Counter('rows_read'); // 成功读取的行数
 
 // 每个用户的请求频率设置
 const REQUESTS_PER_SECOND = 8; // 每秒 8 个请求
-const WRITE_RATIO = 0.8; 
+const WRITE_RATIO = 1; 
 
 // 生成测试数据
 function generateData() {
     const userId = USERS[Math.floor(Math.random() * USERS.length)];
     const eventType = EVENTS[Math.floor(Math.random() * EVENTS.length)];
     const eventValue = (Math.random() * 100).toFixed(2);
-    const pageUrl = `https_example_com_page_${Math.floor(Math.random() * 100)}`;
-    const eventTime = Date.now() * 1000000; // 纳秒级时间戳
-    return `user_behavior,user_id=${userId},event_type=${eventType},page_url=${pageUrl} event_value=${eventValue} ${eventTime}`;
+    const pageUrl = `https://example.com/page_${Math.floor(Math.random() * 100)}`;
+    const eventTime = new Date().toISOString().replace('T', ' ').replace('Z', ''); // ISO8601 转 TDengine 时间格式
+    return `INSERT INTO user_behavior_1 USING user_behavior TAGS ('${userId}') VALUES ('${eventTime}', '${userId}', '${eventType}', ${eventValue}, '${pageUrl}'); FLUSH;`;
 }
 
 // 写操作
 function writeData() {
     const payload = generateData();
-    if (!payload.trim()) {
-        failedRequests.add(1);
-        console.error('Generated payload is empty or invalid.');
-        successRate.add(false); // 记录失败
-        return;
-    }
-
-    const params = { headers: { 'Content-Type': 'text/plain' } };
+    const params = {
+        headers: {
+            'Content-Type': 'text/plain',
+            'Authorization': AUTH_HEADER,
+        },
+    };
     const start = new Date().getTime();
 
-    const res = http.post(`${QUESTDB_URL}write`, payload, params);
+    const res = http.post(TDENGINE_URL, payload, params);
 
     const end = new Date().getTime();
     writeDuration.add(end - start);
 
-    if (res && res.status === 204) {
+    if (res && res.status === 200) {
         rowsWritten.add(1);
-        successRate.add(true); // 记录成功
+        successRate.add(true);
     } else {
         failedRequests.add(1);
-        successRate.add(false); // 记录失败
+        successRate.add(false);
         console.error(`Unexpected status code: ${res ? res.status : 'no response'}, body: ${res ? res.body : 'no response'}`);
     }
 }
@@ -62,22 +62,49 @@ function writeData() {
 // 读操作
 function readData() {
     const userId = USERS[Math.floor(Math.random() * USERS.length)];
-    const query = `SELECT * FROM user_behavior WHERE user_id='${userId}' ORDER BY event_time DESC LIMIT 100`;
-    const params = { headers: { 'Content-Type': 'application/json' } };
+    const query = `SELECT * FROM user_behavior WHERE user_id='${userId}' and event_time >= NOW() - 10s ORDER BY event_time DESC LIMIT 100;`;
+    const params = {
+        headers: {
+            'Content-Type': 'text/plain',
+            'Authorization': AUTH_HEADER,
+        },
+    };
     const start = new Date().getTime();
 
-    const res = http.get(`${QUESTDB_URL}exec?query=${encodeURIComponent(query)}`, params);
+    const res = http.post(TDENGINE_URL, query, params);
 
     const end = new Date().getTime();
     readDuration.add(end - start);
 
-    if (res && res.status === 200) {
-        const rows = JSON.parse(res.body).dataset.length || 0;
-        rowsRead.add(rows);
-        successRate.add(true); // 记录成功
+    if (res && res.status === 200 && res.body) {
+        try {
+            // 解析 JSON 响应
+            const response = JSON.parse(res.body);
+    
+            // 确认响应 code 为 0 且 data 存在
+            if (response.code === 0 && response.data) {
+                const rows = response.data.length; // 获取数据行数
+                rowsRead.add(rows); // 累加读取的行数
+                successRate.add(true); // 成功
+                // console.log(`Query successful. Rows read: ${rows}`);
+            } else {
+                rowsRead.add(0); // 如果 data 不存在或行数为 0，计为 0
+                failedRequests.add(1);
+                successRate.add(false); // 失败
+                console.warn(`Query returned no data. Response: ${res.body}`);
+            }
+        } catch (error) {
+            // 解析 JSON 失败
+            rowsRead.add(0);
+            failedRequests.add(1);
+            successRate.add(false);
+            console.error(`Failed to parse response: ${res.body}, Error: ${error.message}`);
+        }
     } else {
+        // 请求失败
+        rowsRead.add(0);
         failedRequests.add(1);
-        successRate.add(false); // 记录失败
+        successRate.add(false);
         console.error(`Unexpected status code: ${res ? res.status : 'no response'}, body: ${res ? res.body : 'no response'}`);
     }
 }
@@ -93,9 +120,9 @@ export const options = {
 };
 
 export default function () {
-    // 8个请求，但在1秒内随机间隔
+    // 在1秒内随机间隔
     const requestCount = REQUESTS_PER_SECOND;
-    const randomWaits = Array.from({length: requestCount}, () => Math.random() * 1000);
+    const randomWaits = Array.from({ length: requestCount }, () => Math.random() * 1000);
     
     // 对随机等待时间进行归一化，确保总时间不超过1秒
     const totalRandomTime = randomWaits.reduce((a, b) => a + b, 0);
