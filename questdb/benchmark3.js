@@ -4,7 +4,7 @@ import { sleep } from 'k6';
 
 // 配置
 const QUESTDB_URL = 'http://localhost:9000/';
-const vus = 200; // 并发用户数
+const vus = 10; // 并发用户数
 const generateRandomString = () => Math.random().toString(36).substring(2, 8); // 生成6位随机字符串
 const USERS = Array.from({ length: vus }, (_, i) => `user${i + 1}_${generateRandomString()}`); // 动态生成 USERS
 const EVENTS = ['browse', 'scroll', 'purchase', 'cancel_payment'];
@@ -62,7 +62,7 @@ function writeData() {
 // 读操作
 function readData() {
     const userId = USERS[Math.floor(Math.random() * USERS.length)];
-    const query = `SELECT * FROM user_behavior WHERE user_id='${userId}' ORDER BY event_time DESC LIMIT 100`;
+    const query = `SELECT * FROM user_behavior WHERE user_id='${userId}' LIMIT 1`;
     const params = { headers: { 'Content-Type': 'application/json' } };
     const start = new Date().getTime();
 
@@ -74,7 +74,11 @@ function readData() {
     if (res && res.status === 200) {
         const rows = JSON.parse(res.body).dataset.length || 0;
         rowsRead.add(rows);
-        successRate.add(true); // 记录成功
+        if (rows === 0) {
+            successRate.add(false); // 记录失败
+        } else {
+            successRate.add(true); // 记录成功
+        }
     } else {
         failedRequests.add(1);
         successRate.add(false); // 记录失败
@@ -93,21 +97,32 @@ export const options = {
 };
 
 export default function () {
-    // 8个请求，但在1秒内随机间隔
+    // 定义每秒的请求总数
     const requestCount = REQUESTS_PER_SECOND;
-    const randomWaits = Array.from({length: requestCount}, () => Math.random() * 1000);
-    
-    // 对随机等待时间进行归一化，确保总时间不超过1秒
+
+    // 根据写操作比例计算写操作和读操作的数量
+    const writeCount = Math.floor(requestCount * WRITE_RATIO);
+    const readCount = requestCount - writeCount;
+
+    // 生成写和读的操作列表
+    const operations = [
+        ...Array(writeCount).fill('write'),
+        ...Array(readCount).fill('read'),
+    ];
+
+    // 随机生成等待时间并归一化，确保总时间不超过1秒
+    const randomWaits = Array.from({ length: requestCount }, () => Math.random() * 1000);
     const totalRandomTime = randomWaits.reduce((a, b) => a + b, 0);
     const normalizedWaits = randomWaits.map(wait => (wait / totalRandomTime) * 1000);
 
-    for (let i = 0; i < requestCount; i++) {
-        if (Math.random() < WRITE_RATIO) {
+    // 按照操作顺序执行写操作和读操作，确保写在读之前
+    for (let i = 0; i < operations.length; i++) {
+        if (operations[i] === 'write') {
             writeData();
         } else {
             readData();
         }
-        
+
         // 在每个请求之间随机但受控地等待
         sleep(normalizedWaits[i] / 1000);
     }

@@ -7,7 +7,7 @@ client.connect('127.0.0.1', 10800)
 # 查询数据
 try:
     # 查询 SQL
-    query = "SELECT * FROM user_behavior WHERE user_id = 'user70_4mi3nb'"
+    query = "SELECT * FROM user_behavior WHERE user_id = 'user12_ztlnhn'"
     # query = "SELECT count(*) FROM user_behavior"
     
     # 执行查询
