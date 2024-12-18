@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="
+        http://www.springframework.org/schema/beans
+        http://www.springframework.org/schema/beans/spring-beans.xsd">
+
+    <!-- Ignite configuration -->
+    <bean class="org.apache.ignite.configuration.IgniteConfiguration">
+    <property name="cacheConfiguration">
+        <bean class="org.apache.ignite.configuration.CacheConfiguration">
+        <!-- 缓存名称 -->
+        <property name="name" value="user_behavior_cache"/>
+        <!-- 缓存模式：每个节点存储完整数据 -->
+        <property name="cacheMode" value="REPLICATED"/>
+        <!-- 事务模式 -->
+        <property name="atomicityMode" value="TRANSACTIONAL"/>
+        <!-- 分区丢失策略：读写安全 -->
+        <property name="partitionLossPolicy" value="READ_WRITE_SAFE"/>
+        <!-- 写入同步模式：所有节点同步完成后返回 -->
+        <property name="writeSynchronizationMode" value="FULL_SYNC"/>
+        <!-- 数据重新平衡模式：同步重平衡 -->
+        <property name="rebalanceMode" value="SYNC"/>
+        <!-- 预加载数据批量大小（可选优化） -->
+        <property name="rebalanceBatchSize" value="524288"/>
+        <!-- 节点启动重平衡等待时间（可选优化） -->
+        <property name="rebalanceTimeout" value="600000"/> <!-- 10分钟 -->
+        <property name="readFromBackup" value="false"/> <!-- 禁止从备份读取 -->
+        </bean>
+    </property>
+</bean>
+</beans>
